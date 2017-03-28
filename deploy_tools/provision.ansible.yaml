@@ -1,0 +1,151 @@
+---
+
+- hosts: all
+
+  vars:
+      host: "{{ inventory_hostname }}"
+      user: "{{ ansible_user_id }}"
+      home: "{{ ansible_user_dir }}"
+      repo_url: 'https://github.com/joegnis/superlists'
+      site_directory: '{{ home }}/sites/{{ host }}'
+      source_directory: '{{ site_directory }}/source'
+      virtualenv_directory: '{{ site_directory }}/virtualenv'
+      django:
+        secret_key_file_path: '{{ source_directory }}/superlists/secret_key.py'
+        settings_path: '{{ source_directory }}/superlists/settings.py'
+
+  tasks:
+    - name: ensure the repo for Python 3.6 is added
+      apt_repository: repo='ppa:fkrull/deadsnakes'
+      become: yes
+      become_method: sudo
+
+    - name: ensure required packages are installed
+      apt: pkg=nginx,git,python3.6,python3.6-venv state=present update_cache=yes
+      become: yes
+      become_method: sudo
+
+    - name: create directories if necessary
+      file:
+        path='{{ site_directory }}/{{ item }}'
+        state=directory
+      with_items: ['database', 'static', 'virtualenv', 'source']
+
+    - name: get the hash of the current commit in the local tree
+      local_action: command git log -n 1 --format=%H
+      register: local_commit_hash_output
+
+    - name: get latest source and blow away local changes
+      git:
+        repo="{{ repo_url }}"
+        dest='{{ source_directory }}'
+        version='{{ local_commit_hash_output.stdout }}'
+        force=yes
+
+    - name: update DEBUG setting in Django settings
+      lineinfile:
+        dest='{{ django.settings_path }}'
+        regexp='^DEBUG'
+        line='DEBUG = False'
+
+    - name: update ALLOWED_HOSTS setting in Django settings
+      lineinfile:
+        dest='{{ django.settings_path }}'
+        regexp='^ALLOWED_HOSTS'
+        line='ALLOWED_HOSTS = ["{{ host }}"]'
+
+    - name: get the stat of the secret key file
+      stat: path='{{ django.secret_key_file_path }}'
+      register: stat_secret_key_file
+
+    - name: generate a random secret key if secret key file doesn't exist
+      shell: >
+        python3.6 -c 'import random; import string; print("".join([random.SystemRandom().choice(string.digits + string.ascii_letters + string.punctuation) for i in range(100)]))' | sed "s#['\"\\\\]#\\\\&#g"
+      register: new_secret_key_output
+      when: not stat_secret_key_file.stat.exists
+
+    - name: create a secret key file if it doesn't exist
+      lineinfile:
+        dest='{{ django.secret_key_file_path }}'
+        create=yes
+        line='SECRET_KEY = "{{ new_secret_key_output.stdout }}"'
+      when: not stat_secret_key_file.stat.exists
+
+    - name: import the secret key into settings after creating a new key
+      lineinfile:
+        dest='{{ django.settings_path }}'
+        line='from .secret_key import SECRET_KEY'
+      when: not stat_secret_key_file.stat.exists
+
+    - name: get the stat of the virtualenv file
+      stat: path='{{ virtualenv_directory }}/bin/pip'
+      register: virtualenv_stat
+
+    - name: create a virtualenv if it does not exist
+      command: python3.6 -m venv '{{ virtualenv_directory }}'
+
+    - name: install required pip packages
+      command: "'{{ virtualenv_directory }}/bin/pip' install -r '{{ source_directory }}/requirements.txt'"
+
+    - name: collect static files
+      command: "'{{ virtualenv_directory }}/bin/python' '{{ source_directory }}/manage.py' collectstatic --noinput"
+
+    - name: update database
+      command: "'{{ virtualenv_directory }}/bin/python' '{{ source_directory }}/manage.py' migrate --noinput"
+
+    - name: allow long hostnames in nginx
+      lineinfile:
+        dest=/etc/nginx/nginx.conf
+        regexp='^(\s+)#? ?server_names_hash_bucket_size'
+        backrefs=yes
+        line='\1server_names_hash_bucket_size 64;'
+      become: yes
+      become_method: sudo
+
+    - name: add nginx config to sites-available
+      template: src=./nginx.conf.j2 dest=/etc/nginx/sites-available/{{ host }}
+      become: yes
+      become_method: sudo
+      notify:
+        - restart nginx
+
+    - name: add symlink in nginx sites-enabled
+      file:
+        src=/etc/nginx/sites-available/{{ host }}
+        dest=/etc/nginx/sites-enabled/{{ host }}
+        state=link
+      become: yes
+      become_method: sudo
+      notify:
+        - restart nginx
+
+    - name: write gunicorn service script
+      template:
+        src=./gunicorn.service.j2
+        dest=/etc/systemd/system/gunicorn-{{ host }}.service
+      become: yes
+      become_method: sudo
+      notify:
+        - restart gunicorn
+
+    - name: make sure nginx is running
+      service: name=nginx state=running
+      become: yes
+      become_method: sudo
+    - name: make sure gunicorn is running
+      service: name=gunicorn-{{ host }} state=running
+      become: yes
+      become_method: sudo
+
+  handlers:
+    - name: restart nginx
+      service: name=nginx state=restarted
+      become: yes
+      become_method: sudo
+
+    - name: restart gunicorn
+      service: name=gunicorn-{{ host }} state=restarted
+      become: yes
+      become_method: sudo
+
+# vim: ft=ansible

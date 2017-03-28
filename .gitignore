@@ -2,3 +2,7 @@ db.sqlite3
 geckodriver.log
 __pycache__
 *.pyc
+
+# Vagrant
+.vagrant
+deploy_tools/*.retry
