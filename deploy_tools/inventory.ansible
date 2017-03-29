@@ -5,6 +5,6 @@ superlists.weiran.org ansible_user=yifan
 superlists-staging.weiran.org ansible_user=yifan
 
 [local]
-localhost ansible_host=127.0.0.1 ansible_user=vagrant ansible_port=2222 ansible_private_key_file=.vagrant/machines/default/virtualbox/private_key
+localhost ansible_host=127.0.0.1 ansible_user=vagrant ansible_port=2237
 
 # vim: ft=ansible_hosts
