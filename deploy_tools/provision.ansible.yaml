@@ -128,23 +128,20 @@
       notify:
         - restart gunicorn
 
-    - name: make sure nginx is running
-      service: name=nginx state=running
-      become: yes
-      become_method: sudo
-    - name: make sure gunicorn is running
-      service: name=gunicorn-{{ host }} state=running
-      become: yes
-      become_method: sudo
-
   handlers:
     - name: restart nginx
-      service: name=nginx state=restarted
+      systemd:
+        name=nginx
+        state=restarted
+        daemon_reload=yes
       become: yes
       become_method: sudo
 
     - name: restart gunicorn
-      service: name=gunicorn-{{ host }} state=restarted
+      systemd:
+        name=gunicorn-{{ host }}
+        state=restarted
+        daemon_reload=yes
       become: yes
       become_method: sudo
 
